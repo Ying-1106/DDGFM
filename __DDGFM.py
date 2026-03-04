@@ -16,7 +16,7 @@ from utils import *
 import numpy as np
 import argparse
 import time
-from datetime import datetime  # 加在文件开头（只需要一次）
+from datetime import datetime  
 
 now_file = os.path.abspath(__file__)   #   当前文件
 current_dir = os.path.dirname(now_file) #   当前文件所在目录
