@@ -11,7 +11,7 @@ The `__DDGFM.py` script implements the complete workflow including pretraining, 
 
 Pre-training and downstream fine-tuning:
 ```bash
-python  __DDGFM.py   --pre_dataset  CiteSeer_PubMed_Photo_Computers    --adapt_dataset  Cora  
+python  __DDGFM.py   --pre_dataset  PubMed_CiteSeer_Photo_amazonratings_romanempire_squirrel_cornell_Facebook_CoauthorCS_WikiCS    --adapt_dataset  Cora  
 ```
 
 
