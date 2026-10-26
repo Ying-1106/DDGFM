@@ -18,7 +18,7 @@ import torch
 from torch_geometric.nn import global_add_pool, FAConv
 
 
-device = torch.device("cuda:0")  # 使用 GPU 0
+# 工具函数跟随输入张量所在设备，不单独指定 GPU。
 
 
 def preprocess(data, node_feature_dim=256):
@@ -196,19 +196,13 @@ def get_posi_nega_graphs(subgraphs, connectors ,num_subgraphs,neg_numbers):
 class GCN(torch.nn.Module):
     def __init__(self, num_features, hidden):
         super(GCN, self).__init__()
-
-        
+        # num_features是节点特征统一后的初始维度，  hidden是经过GNN变换后的维度
         self.dropout = 0.2
-
         self.t1 = torch.nn.Linear(num_features, hidden)
-
         self.conv1 = GCNConv(hidden, hidden)
         self.conv2 = GCNConv(hidden, hidden)
-
         self.t2 = torch.nn.Linear(hidden, hidden)
-
         self.global_pool = global_add_pool
-
         self.reset_parameters()
 
     def reset_parameters(self):
@@ -223,7 +217,7 @@ class GCN(torch.nn.Module):
         edge_index, batch = data.edge_index, data.batch #   edge_index是 10个图的 所有边，batch用来指明每个节点属于10个图中的哪个图
 
         h = torch.dropout(x, p=self.dropout, train=self.training)
-        #   对初始节点特征（长度num_features）做一个线性变换，变成长度 hidden
+        #   t1 用于对初始节点特征（长度num_features）做一个线性变换，变成长度 hidden
         h = torch.relu(self.t1(h))  
         h = torch.dropout(h, p=self.dropout, train=self.training)
 
@@ -360,7 +354,7 @@ class ContrastiveLoss(torch.nn.Module):
         num_subgraphs_per_domain = num_subgraphs
 
         domain_ids = torch.repeat_interleave(
-            torch.arange(num_domains), 
+            torch.arange(num_domains, device=zi.device),
             repeats=num_subgraphs_per_domain
         )
 
@@ -375,9 +369,6 @@ class ContrastiveLoss(torch.nn.Module):
 
         sim_matrix = sim_matrix.clone()
         sim_matrix.fill_diagonal_(0.0)
-
-        sim_matrix = sim_matrix.to(device)
-        pos_mask = pos_mask.to(device)
 
         numerator = (sim_matrix * pos_mask).sum(dim=1)    # [N]，  表示的是每个子图的LOSS中的分子
         denominator = sim_matrix.sum(dim=1)               # [N]，  表示的是每个子图的LOSS中的分母
@@ -449,3 +440,58 @@ class FAGCN(torch.nn.Module):
 
 
         return graph_emb, h
+
+
+
+
+
+
+#   多层GAT
+class GAT(torch.nn.Module):
+    def __init__(self, num_features, hidden, heads=4):
+        super(GAT, self).__init__()
+        # num_features是节点特征统一后的初始维度，  hidden是经过GNN变换后的维度
+        self.dropout = 0.2
+        self.t1 = torch.nn.Linear(num_features, hidden)
+        
+        # GAT特有：多头注意力机制 (Multi-head Attention)
+        # 设定 concat=False 表示对多个 attention head 的输出求平均，从而保持输出维度为 hidden
+        # 如果 concat=True (默认)，输出维度会变成 hidden * heads，那么下一层(比如t2)的输入维度就需要作相应修改
+        self.conv1 = GATConv(hidden, hidden, heads=heads, concat=False)
+        self.conv2 = GATConv(hidden, hidden, heads=heads, concat=False)
+        
+        self.t2 = torch.nn.Linear(hidden, hidden)
+        self.global_pool = global_add_pool
+        self.reset_parameters()
+
+    def reset_parameters(self):
+        torch.nn.init.xavier_normal_(self.t1.weight, gain=1.414)
+        torch.nn.init.xavier_normal_(self.t2.weight, gain=1.414)
+        # 注：GATConv 等 PyG 内置层在实例化时会自动初始化参数，无需在这里手动处理 conv1 和 conv2
+
+    def forward(self, data):   #  如果data是 一个batch，那就包含多个图
+
+        x = data.x if data.x is not None else data.feat
+        edge_index, batch = data.edge_index, data.batch #   edge_index是 10个图的 所有边，batch用来指明每个节点属于10个图中的哪个图
+
+        h = torch.dropout(x, p=self.dropout, train=self.training)
+        #   t1 用于对初始节点特征（长度num_features）做一个线性变换，变成长度 hidden
+        h = torch.relu(self.t1(h))  
+        h = torch.dropout(h, p=self.dropout, train=self.training)
+
+        #   使用 GATConv 替代 GCNConv，基于邻居节点的注意力权重来进行特征聚合
+        h = F.leaky_relu(self.conv1(h, edge_index))
+        h = F.leaky_relu(self.conv2(h, edge_index))        
+
+        # 如果有多个图，那么 h 是多个图的所有节点的特征。  如果有1个图，那h就是 1个图的全部节点特征
+        h = self.t2(h)
+
+        #   这就是ReadOut操作， ReadOut得到每个图的 图向量(batch用来区分当前节点属于哪个图)。  
+        #   即使只有1个图（batch为None），那就直接把这一个图的全部节点向量sum成1个图向量
+        graph_emb = self.global_pool(h, batch)
+
+        #   不论data是单个图还是batch（多个图） ， GAT都返回更新后的节点特征 h  ， 以及ReadOut操作之后的 图向量
+        return graph_emb, h
+
+
+
