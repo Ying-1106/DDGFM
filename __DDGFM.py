@@ -29,7 +29,7 @@ PRETRAIN_EPOCHS = 450
 
 
 if torch.cuda.is_available():
-    device = torch.device("cuda:3")  
+    device = torch.device("cuda:0")  
 else:
     device = torch.device("cpu")  
 
@@ -965,7 +965,7 @@ if __name__ == "__main__":
         with open(output_path, 'a+') as f:
             f.write('-----------------------DDGFM--------------------------\n')
             f.write(f'Time: {datetime.now().strftime("%Y-%m-%d %H:%M:%S")}\n') 
-            f.write(f'Pretrain:{args.pre_dataset}, Downstream： : 【{args.adapt_dataset}】\n')
+            f.write(f'Pretrain:{args.pre_dataset}, Downstream: 【{args.adapt_dataset}】\n')
             f.write(f'ACC :  {np.mean(ACC_List):.4f} ± {np.std(ACC_List):.4f} \n')
             # f.write(f'F1 :  {np.mean(F1_List):.4f} ± {np.std(F1_List):.4f} \n')
             # f.write(f'AUC :  {np.mean(AUROC_List):.4f} ± {np.std(AUROC_List):.4f} \n')
