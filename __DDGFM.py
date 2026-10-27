@@ -8,7 +8,7 @@ import os
 from torch_geometric.transforms import SVDFeatureReduction
 import torch.nn as nn
 import torch.nn.functional as F
-from torch_geometric.loader import DataLoader   #   PyG的 Dataloader
+from torch_geometric.loader import DataLoader   
 from torchmetrics import MeanMetric, Accuracy, F1Score, AUROC
 from tqdm import tqdm
 from copy import deepcopy
@@ -16,35 +16,28 @@ from utils import *
 import numpy as np
 import argparse
 import time
-from datetime import datetime  # 加在文件开头（只需要一次）
+from datetime import datetime 
 
-now_file = os.path.abspath(__file__)   #   当前文件
-current_dir = os.path.dirname(now_file) #   当前文件所在目录
-data_dir = os.path.join(os.path.dirname(current_dir) , '_MDGCL_Data_dir')
+now_file = os.path.abspath(__file__)   
+current_dir = os.path.dirname(now_file) 
+data_dir = os.path.join(os.path.dirname(current_dir) , 'DDGFM_Data_dir')
 
-#   默认值一般是150，做简单测试的时候可以设置的少一点
+
 DOWNSTREAM_EPOCH_NUMBER = 150
-#   默认值一般是10，做简单测试的时候可以设置的少一点
 SEED_NUM = 10
-#   默认值一般是450，做简单测试的时候可以设置的少一点
 PRETRAIN_EPOCHS = 450
 
 
 if torch.cuda.is_available():
     device = torch.device("cuda:3")  
 else:
-    device = torch.device("cpu")  # 如果没有 GPU，则使用 CPU
-#   PyG_Dataset_Dir应该 在 MDGCL_Data_dir之下
+    device = torch.device("cpu")  
+
 PyG_Dataset_Dir = os.path.join(data_dir ,"PyG_Dataset" )
 
 
-#   最终版本特点：
-#  1.下游阶段一律做成【图分类】
-#  2.可以处理【分子图】和【单图数据集】
-#  3.一次预训练 + 5次（或10次）微调
 
 
-#   预训练
 def pretrain(    num_epochs = 100,    
              num_subgraphs = 30,    
              walk_length = 30 ,
@@ -59,19 +52,19 @@ def pretrain(    num_epochs = 100,
              pre_datasets = ['Cora','PubMed','CiteSeer','Photo','Computers'],
              regular = 0.1,
              regular_si = 0.1,
-             regular_3 = 0.1,  # 无用参数
+             regular_3 = 0.1,  
              min_sim = -0.5,
              
              ):
 
-    pretrained_model_and_connectors = os.path.join(data_dir,'预训练模型和连接点')  
+    pretrained_model_and_connectors = os.path.join(data_dir,'Pretrained_Checkpoint')  
     if not os.path.exists(pretrained_model_and_connectors):
         os.makedirs(pretrained_model_and_connectors)
     else:
         pass
 
     pretrain_datasets = '_'.join(pre_datasets)
-    # #   已经预训练过的模型，则直接退出。  如果把下面两句注释掉，那就是每次都要重新预训练一遍
+    # #   
     # if os.path.exists(os.path.join(  pretrained_model_and_connectors  , f'Pretrained_{model_name}_of_{pretrain_datasets}.pt')):
     #     return
 
@@ -102,7 +95,7 @@ def pretrain(    num_epochs = 100,
             datasets[data_name] = Coauthor(root = PyG_Dataset_Dir , name = 'CS')._data
         # elif data_name == 'GitHub':
         #     datasets[data_name] = GitHub(root = os.path.join(PyG_Dataset_Dir,'GitHub'))._data
-        #   接下来是异配图
+        #   
         elif data_name == 'amazonratings':
             datasets[data_name] = HeterophilousGraphDataset(root=PyG_Dataset_Dir , name = 'amazon_ratings')._data
         elif data_name == 'romanempire':
@@ -118,7 +111,7 @@ def pretrain(    num_epochs = 100,
             datasets[data_name] = WebKB(root = PyG_Dataset_Dir, name = 'cornell')._data
 
         elif data_name in ['PROTEINS','ENZYMES','COX2','MUTAG','BZR']:
-        #   一个数据集包含多个图（分子图）
+        #   
             datasets[data_name] = TUDataset(root=PyG_Dataset_Dir,name = data_name)
         elif data_name == 'Facebook':
             datasets[data_name] = FacebookPagePage(root = os.path.join(PyG_Dataset_Dir,'Facebook') )[0]  
@@ -130,24 +123,24 @@ def pretrain(    num_epochs = 100,
             datasets[data_name] = WikiCS(  root = os.path.join(PyG_Dataset_Dir,'WikiCS')  )._data
 
 
-    # 统一节点特征维度。分子图就padding。单图数据集就SVD
+    
     for data_name, data in datasets.items():
 
         if data_name in ['PROTEINS','ENZYMES','COX2','MUTAG','BZR']:   
-            #   图分类数据集,那么 data是一个类似list的东西，包含多个图，需要一个一个进行特征维度对齐
+            #   
             graph_list = []
             for graph_id in range(data.len()):
                 # graph__processed = preprocess(data[graph_id],node_feature_dim = node_feats)
                 # graph_list.append(graph__processed)
                 # pass
-                #   single_mole_graph是  1个  分子图
+                #   
                 single_mole_graph = data[graph_id].clone()
-                #   1个分子图  原本的  特征  x
+                #   
                 x = single_mole_graph.x.clone().to(device)
                 num_nodes = single_mole_graph.x.size(0)
 
                 target_dim = node_feats
-                #   分子图初始的特征维度
+                #   
                 feat_dim = x.size(1)
 
                 pad = torch.zeros(
@@ -158,47 +151,43 @@ def pretrain(    num_epochs = 100,
 
                 single_mole_graph.x = x
                 graph_list.append(single_mole_graph)
-            #   图分类数据集： 包含多个图的 列表
+            #  
             datasets[data_name] = graph_list
             pass
         else:
 
-            #   节点分类数据集：只包含一个 整图
+            #   
             datasets[data_name] = preprocess(data, node_feature_dim = node_feats)
 
 
-    # 获取每个数据集的子图
+    
     subgraphs = {}
     for data_name, data in datasets.items():
-        #   如果是图分类数据集，data本身(graph_list)就相当于多个子图, 子图数量和规定的子图数量不一致，但我们只选择固定数量的部分
+        #   
         if data_name in ['PROTEINS','ENZYMES','COX2','MUTAG','BZR']:   
             subgraphs[data_name] = random.sample(data, num_subgraphs)
 
             pass
         else:
-            #   单图数据集，需要采集若干子图。
+            #   
             subgraphs[data_name] = get_subgraphs(data,num_subgraphs=num_subgraphs,walk_length=walk_length)
 
 
 
 
-
-    # 构造【 初始 domain token 】
-    # 每个预训练数据集有一个  original domain token  （用节点特征平均值   来作为初始domain token  ）
-    # 用mean获取全局信息，这样不会因为某个领域节点过多而导致领域token过大。
     connectors = {}
     for data_name, data in datasets.items():    
         if data_name in ['PROTEINS','ENZYMES','COX2','MUTAG','BZR']:
-            #   如果是图分类数据集，本身包含多个图。那就把所有图的所有节点特征都加起来
+            # 
             accum = None
-            sum_x_list = []  # 用于存储每个子图的 sum_x
+            sum_x_list = []  # 
             for subgraph_ in data:
-                sum_x = torch.mean(subgraph_.x, dim=0)  # 每个子图的特征按节点求和(或者mean)
+                sum_x = torch.mean(subgraph_.x, dim=0)  # 
                 sum_x_list.append(sum_x)
             accum = torch.mean(torch.stack(sum_x_list), dim=0)
             connectors[data_name] = accum
             pass
-        else:#  单图数据集，比如Cora：两层无参数GNN（纯邻居聚合）后，再做全图平均池化
+        else:#  
             x = data.x.to(device)
             edge_index, _ = add_self_loops(
                 data.edge_index.to(device),
@@ -206,7 +195,7 @@ def pretrain(    num_epochs = 100,
             )
             row, col = edge_index
 
-            # 固定的对称归一化邻接传播：不包含任何可训练参数。
+            
             degree = torch.bincount(row, minlength=data.num_nodes).to(dtype=x.dtype)
             degree_inv_sqrt = degree.pow(-0.5)
             degree_inv_sqrt.masked_fill_(torch.isinf(degree_inv_sqrt), 0.0)
@@ -223,15 +212,12 @@ def pretrain(    num_epochs = 100,
 
             connectors[data_name] = torch.mean(x, dim=0)
     original_domain_tokens = list(connectors.values())
-    original_domain_tokens = torch.stack(original_domain_tokens, dim=0)   # shape: (领域数量, 128)
+    original_domain_tokens = torch.stack(original_domain_tokens, dim=0)  
     original_domain_tokens = original_domain_tokens.to(device)
 
     
 
-    # num_domains  就是  数据集的  数量
     num_domains = len(subgraphs)
-
-
 
     from torch_geometric.data import Batch
 
@@ -243,7 +229,7 @@ def pretrain(    num_epochs = 100,
     for a_subgraph in all_subgraphs_list:
         a_subgraph = a_subgraph.to(device)
 
-    #   batch_graph包含了每个域产出的所有子图,用batch变量来区分多图
+    #   
     batch_graph = Batch.from_data_list(all_subgraphs_list)
 
 
@@ -258,7 +244,7 @@ def pretrain(    num_epochs = 100,
                           
                           dropout = 0.15, 
                           epsilon = 0.2,
-                          num_head = 4 #    这个用不到
+                          num_head = 4 #    
                           ).to(device)
         
     elif model_name == 'GAT':
@@ -266,88 +252,68 @@ def pretrain(    num_epochs = 100,
 
 
 
-
-
-    # 每个子图先过GNN得到子图向量，然后再输入给TFEncoder
-
-    # 1. 定义单Encoder Layer单层
     encoder_layer = nn.TransformerEncoderLayer(
         d_model= hidden_fts,
         dim_feedforward = 256,
         nhead= 2,
-        batch_first=True,   # 设置为 True，输入形状为 (batch, seq, feature)
-        dropout=0.0         # 可调
+        batch_first=True,   # 
+        dropout=0.0         # 
     )
 
-    # 2. 多层Encoderlayer堆叠而成
     transformer_encoder = nn.TransformerEncoder(encoder_layer, num_layers = 6)
     transformer_encoder = transformer_encoder.to(device)
 
 
 
-    # ===============  查看一下模型的参数量
-    # 1. 统计可训练参数的总个数
     total_params = sum(p.numel() for p in transformer_encoder.parameters() if p.requires_grad)
 
-    # 2. 计算占用的内存大小 (默认 float32，每个参数占 4 字节)
-    # 1 MB = 1024 * 1024 字节
+
     params_in_mb = total_params * 4 / (1024 ** 2)
 
-    print(f" 可训练参数总量: {total_params:,} 个")
-    print(f" 模型参数占用大小: {params_in_mb:.3f} MB")
-    # ===============查看一下模型的参数量（结束）
 
 
-
-    #   proj用于把  GNN编码后的domain_token映射到 50维，这样方便和  初始domain token计算余弦相似度
-    # 现在我把 node_fts和hidden设置成一样的（比如都是128），这样就不用 proj了。
-    # proj = nn.Linear(hidden_fts, node_feats, bias=False).to(device)
-    
-    # LOSS_fn用于计算  对比学习的LOSS。
     loss_fn = ContrastiveLoss().to(device)
     loss_fn.train() 
 
-    #   Adam优化器
+
     optimizer_pretrain = torch.optim.Adam(  list(  GNN_Model.parameters() )  + list(transformer_encoder.parameters()),  
                                           lr = pre_lr,
                                           weight_decay =  pre_wd)
 
 
-    start_time = time.time()  # 记录预训练开始时间
+    start_time = time.time()  # 
 
     for epoch in range(num_epochs):
         GNN_Model.train()
-        # proj.train()
+        # 
         transformer_encoder.train()
         total_loss = 0
-        # batch_graph表示的是  每个域的  所有子图
+        # 
         batch_graph = batch_graph.to(device)
         optimizer_pretrain.zero_grad()
 
-        #  子图过GNN，得到 所有子图的  表示向量graph_emb
+        #  
         graph_embedding, node_embed = GNN_Model(data=batch_graph)
-        #   所有子图向量，模长变成1
+        #  
         graph_embedding = ( graph_embedding / torch.norm(graph_embedding, dim=1, keepdim=True) )
         
 
-        # 把 graph_embed输入给 TFEncoder 变成 output_tokens
-        input_tokens = graph_embedding.unsqueeze(0)  # [1, 390, 128]
+        # 
+        input_tokens = graph_embedding.unsqueeze(0)  
 
-        # ----  通过Transformer Encoder ----
+        # 
         output_tokens = transformer_encoder(input_tokens)  # [1, total_subgraphs, node_feats]
-        # 去掉batch维度，方便计算对比损失
+        # 
         output_tokens = output_tokens.squeeze(0)  # [total_subgraphs, node_feats]
         
 
         
-        # 【 经过GNN编码后的 Domain token 】（表示每个领域的分布）
+        # 
         domain_tokens = {}
         for data_name, data in datasets.items():    
 
             if data_name in ['PROTEINS','ENZYMES','COX2','MUTAG','BZR']:
-                #   如果是图分类数据集，本身包含多个图。这里的 data就是一个list，包含所有分子图的列表
-                # 那就把所有图的所有节点特征都加起来
-                #   molecules_batch是所有分子图构成的batch
+
                 for _ in data:
                     _ = _.to(device)
                 molecules_batch = Batch.from_data_list(data).to(device)
@@ -355,55 +321,39 @@ def pretrain(    num_epochs = 100,
                 domain_tokens[data_name] = torch.mean(node_h,dim=0)
                 
                 pass
-            else:#  单图数据集
-                #   整图过GNN
+            else:#  
+                #   
                 single_graph_embed, node_h = GNN_Model(data=data.to(device))
                 domain_tokens[data_name] = torch.mean(node_h,dim=0)
 
         new_domain_tokens = list(domain_tokens.values())
-        new_domain_tokens = torch.stack(new_domain_tokens, dim=0)   # shape: (领域数量, hidden)
+        new_domain_tokens = torch.stack(new_domain_tokens, dim=0)   # 
 
-        # 现在我把 node_fts和hidden设置成一样的（比如都是128），这样就不用Proj了。
-        # new_domain_tokens = proj(new_domain_tokens) # shape: (领域数量, node_fts)
+
         
-        c_0 = original_domain_tokens.mean(dim=0)   # 原来的凸包中心
+        c_0 = original_domain_tokens.mean(dim=0)   # 
 
-        dir_loss = 0.0  #   正则项，用于控制扩张方向【径向扩张】
-        R_out = 0.0 #   正则项，用来保证每个扩张系数都大于等于1
+        dir_loss = 0.0  #   
+        R_out = 0.0 #   
 
         for i in range(num_domains):
 
-            #   计算正则项 dir_loss.  让v1和v2尽量同方向
+            #   
             v1 = original_domain_tokens[i] - c_0
             v2 = new_domain_tokens[i] - c_0
             dir_loss += 1 - F.cosine_similarity(v1, v2, dim=0) 
 
 
-            #   计算正则项 Rout
-            # 求出  向量的长度
+
             ori_norm = torch.norm(v1)
             new_norm = torch.norm(v2)
-            # 分数值
+
             score = 1 - new_norm / (ori_norm )
-            # 和 0 取最大值
+            # 
             R_out += torch.maximum(score, torch.tensor(0.0, device=device))
         
 
-        #   R3在  第六版本的论文中，已经被弃置
-        # R3 = 0.0    #   正则项，用来防止  凸包过度扩张，也就是让两个源域之间至少有最低的相似度。
-        # m = num_domains
-        # for k in range(m):
-        #     for l in range(k + 1, m):
-        #         uk = new_domain_tokens[k]
-        #         ul = new_domain_tokens[l]
 
-        #         cos_sim = F.cosine_similarity(uk, ul, dim=0)
-        #         R3 = R3 + torch.clamp(min_sim - cos_sim, min=0.0)
-
-
-        # LOSS 中： loss_fn（MDGCL）用来扩大差异，进而扩大凸包
-        #  dir_loss和 R_out负责防止凸包偏移。
-        #  之前LOSS还要在加上一个  regular_3 * R3，但是最新版本这一项已经放弃使用了。
 
         loss = loss_fn(output_tokens, output_tokens, 
                        num_domains = num_domains ,
@@ -417,17 +367,15 @@ def pretrain(    num_epochs = 100,
         print(f"Epoch {epoch + 1}/{num_epochs}, Loss: {total_loss:.7f}")
 
 
-        # 如果是最后一个epoch，把 最终输出的tokens收集起来
+        # 
         GNN_Model.eval()
         if epoch == (num_epochs - 1) :
-            # 经过GNN编码之后的 domain token（表示每个领域的分布）
+            # 
             domain_tokens = {}
             for data_name, data in datasets.items():    
 
                 if data_name in ['PROTEINS','ENZYMES','COX2','MUTAG','BZR']:
-                    #   如果是图分类数据集，本身包含多个图。这里的 data就是一个list，包含所有分子图的列表
-                    # 那就把所有图的所有节点特征都加起来
-                    #   molecules_batch是所有分子图构成的batch
+
                     for _ in data:
                         _ = _.to(device)
                     molecules_batch = Batch.from_data_list(data).to(device)
@@ -435,22 +383,22 @@ def pretrain(    num_epochs = 100,
                     domain_tokens[data_name] = torch.mean(node_h,dim=0)
                     
                     pass
-                else:#  单图数据集
+                else:#  
 
                     single_graph_embed, node_h = GNN_Model(data=data.to(device))
                     domain_tokens[data_name] = torch.mean(node_h,dim=0)
-            #  每个Domain，都有一个 final_token
+            #  
             final_GNN_encoded_domain_tokens = list(domain_tokens.values())
             final_GNN_encoded_domain_tokens = torch.stack(final_GNN_encoded_domain_tokens, dim=0)  
 
 
 
     
-    end_time = time.time()  # 记录结束时间
-    elapsed_time = end_time - start_time  # 计算运行时间
+    end_time = time.time()  # 
+    elapsed_time = end_time - start_time  # 
     print(f"代码运行时间: {elapsed_time:.6f} 秒")    
 
-    #   无条件  覆盖之前保存的模型
+    #  
     torch.save(GNN_Model,   os.path.join(  pretrained_model_and_connectors  ,
                                            f'Pretrained_{model_name}_of_{pretrain_datasets}.pt')   )
  
@@ -461,12 +409,9 @@ def pretrain(    num_epochs = 100,
 
 
 
-# 根据不同的 随机数种子（seed），不同的 初始特征长度（node_fts），不同的  shot数， 会有不同的数据集。
-#   获取【下游】数据集 ， 用于图分类。  
-#   如果下游数据集是一个图（Cora），那就把每个节点都构造出诱导子图，附带标签y。然后把这些子图划分成训练、验证、测试
-#   如果下游数据集是分子图（PROTEINS），本身就是包含多个图，每个图有一个标签y。然后把这些图划分成训练、验证、测试
+
 def get_downstream_dataset_graph_classification(dataset_dir,
-                        data_name,  #   下游数据集名称
+                        data_name,  
                         seed, 
                         few_shot=1,
                         node_feats = 128 ,
@@ -474,14 +419,14 @@ def get_downstream_dataset_graph_classification(dataset_dir,
 
 
     import os
-    downstream_Graph_classify = os.path.join(dataset_dir,'downstream_Graph_Classify')  # 替换为你的文件夹路径
+    downstream_Graph_classify = os.path.join(dataset_dir,'downstream_Graph_Classify')  
     if not os.path.exists(downstream_Graph_classify):
         os.makedirs(downstream_Graph_classify)
     else:
         pass
 
 
-    #   如果之前已经保存了下游数据集，现在直接取出下游数据集
+    #   
     if os.path.exists(os.path.join(downstream_Graph_classify,  f'{data_name}_seed{seed}_featsize{node_feats}_shot{few_shot}.pt' ) ):
         return torch.load(os.path.join(downstream_Graph_classify, f'{data_name}_seed{seed}_featsize{node_feats}_shot{few_shot}.pt'  )  , weights_only = False)
  
@@ -533,7 +478,7 @@ def get_downstream_dataset_graph_classification(dataset_dir,
         from ogb.nodeproppred import PygNodePropPredDataset
 
         dataset = PygNodePropPredDataset(root = PyG_Dataset_Dir ,name = 'ogbn-arxiv') 
-        #   ognb-arxiv是一个单图数据集，每个节点代表一个论文， 把论文的题目和摘要（文本）  用skip-gram 变成 的向量
+        #   
         split_idx = dataset.get_idx_split()
         train_idx, valid_idx, test_idx = split_idx["train"], split_idx["valid"], split_idx["test"]
         data = dataset[0] # pyg graph object
@@ -541,25 +486,25 @@ def get_downstream_dataset_graph_classification(dataset_dir,
 
 
     else:
-        print("数据集不在可选范围内")
+        print("Not allowed Dataset")
 
 
 
     
-    #   做特征维度统一
+    #   
     if data_name in ['PROTEINS','ENZYMES','COX2','BZR']:
-        #   图分类数据集： 每个数据集包含多个图，要做 Padding
-        graph_list = [] #   graph_list用来存储  所有 分子图
-        # data包含多个图
+        #   
+        graph_list = [] #   
+        # 
         for graph_id in range(data.len()):
 
-            #   single_mole_graph是  1个  分子图
+            
             single_mole_graph = data[graph_id].clone()
-            #   1个分子图  原本的  特征  x
+            
             x = single_mole_graph.x.clone().to(device)
             num_nodes = single_mole_graph.x.size(0)
             target_dim = node_feats
-            #   分子图初始的特征维度
+            
             feat_dim = x.size(1)
             pad = torch.zeros(
                 (num_nodes, target_dim - feat_dim),
@@ -574,8 +519,8 @@ def get_downstream_dataset_graph_classification(dataset_dir,
         num_classes = torch.unique(data.y).size(0)
         train_dict_list = {key.item():[] for key in torch.unique(data.y)}
         val_test_list = []
-        #   target_graph_list 就是下游数据集包括的全部 子图
-        target_graph_list = graph_list   #   （每个节点都生成一个以该节点为中心的诱导子图）
+        
+        target_graph_list = graph_list   
         from torch.utils.data import random_split, Subset
         for index, graph in enumerate(target_graph_list):
             i_class = graph.y.item()  
@@ -587,7 +532,7 @@ def get_downstream_dataset_graph_classification(dataset_dir,
         for i_class, indice_list in train_dict_list.items():
             all_indices += indice_list
 
-        train_set = Subset(target_graph_list, all_indices)  #   train_set每个类别 shot个 子图
+        train_set = Subset(target_graph_list, all_indices)  
         val_set, test_set = random_split(val_test_list, [0.1,0.9], 
                                         torch.Generator().manual_seed(seed))
         
@@ -608,16 +553,16 @@ def get_downstream_dataset_graph_classification(dataset_dir,
 
         return results 
 
-    #   单个图的数据集（比如Cora）
+    
     else:
 
-        #   特征长度统一
+        #
         data = preprocess(data,node_feature_dim = node_feats)
         num_classes = torch.unique(data.y).size(0)
         train_dict_list = {key.item():[] for key in torch.unique(data.y)}
         val_test_list = []
-        #   target_graph_list 就是下游数据集包括的全部 子图
-        target_graph_list = induced_graphs(data)    #   （每个节点都生成一个以该节点为中心的诱导子图）
+        #   
+        target_graph_list = induced_graphs(data)    #   
         
         from torch.utils.data import random_split, Subset
         for index, graph in enumerate(target_graph_list):
@@ -629,7 +574,7 @@ def get_downstream_dataset_graph_classification(dataset_dir,
         all_indices = []
         for i_class, indice_list in train_dict_list.items():
             all_indices+=indice_list
-        train_set = Subset(target_graph_list, all_indices)  #   train_set每个类别 shot个 子图
+        train_set = Subset(target_graph_list, all_indices)  #   
         val_set, test_set = random_split(val_test_list, [0.1,0.9], 
                                         torch.Generator().manual_seed(seed))
         
@@ -653,12 +598,12 @@ def get_downstream_dataset_graph_classification(dataset_dir,
 
 
 
-#   下游微调，使用注意力,做图分类.  这个方法在单图数据集、多图数据集都可以使用
+#   
 def Adapt_Graph(num_epochs_adapt = DOWNSTREAM_EPOCH_NUMBER,     
           learning_rate_adapt = 1e-3,  
           weight_decay_adapt = 1e-5, 
-          adapt_data='CiteSeer' , # 下游数据集名称
-          pre_datasets = ['PubMed','Photo','Computers'], #  预训练数据集
+          adapt_data='CiteSeer' , 
+          pre_datasets = ['PubMed','Photo','Computers'], 
           adapt_seed = 0,
           model_name = 'GCN',
           node_feats = 128,
@@ -679,19 +624,19 @@ def Adapt_Graph(num_epochs_adapt = DOWNSTREAM_EPOCH_NUMBER,
 
 
     import os
-    pretrained_model_and_connectors = os.path.join(data_dir,'预训练模型和连接点')  
+    pretrained_model_and_connectors = os.path.join(data_dir,'Pretrained_Checkpoint')  
     if not os.path.exists(pretrained_model_and_connectors):
-        #   如果保存下游图分类数据集的文件夹不存在，那么就新建一个
+        
         os.makedirs(pretrained_model_and_connectors)
     else:
-        # print(f"文件夹已存在: {downstream_Graph_classify}")
+        
         pass
     pretrain_datasets = '_'.join(pre_datasets)
 
 
 
 
-    # 取出预训练的 TFencoder 模型
+    
     transformer_encoder =  torch.load(  os.path.join(  pretrained_model_and_connectors  , f'Pretrained_TFencoder_of_{pretrain_datasets}.pt') , 
                                       weights_only=False )
     transformer_encoder = transformer_encoder.to(device)
@@ -700,19 +645,19 @@ def Adapt_Graph(num_epochs_adapt = DOWNSTREAM_EPOCH_NUMBER,
 
 
 
-    # 之前预训练好的GNN模型
+    
     GNN_Model = torch.load(  os.path.join(  pretrained_model_and_connectors  , f'Pretrained_{model_name}_of_{pretrain_datasets}.pt') ,
                            weights_only=False )
     GNN_Model = GNN_Model.to(device)
     
 
-    # 取出之前就有的final_tokens
+    
     final_tokens = torch.load( os.path.join(  pretrained_model_and_connectors  ,
                                         f'final_tokens_of_{pretrain_datasets}.pt') )
     final_tokens = final_tokens.to(device)
 
 
-    #   生成下游图分类数据集，包含训练、验证、测试三部分
+    
     datasets_adapt, num_classes = get_downstream_dataset_graph_classification(dataset_dir = data_dir,
                         data_name = adapt_data, seed = adapt_seed ,node_feats = node_feats, few_shot = few_shot) 
     loaders = { k: DataLoader(v, batch_size=100, shuffle=True) for k, v in datasets_adapt.items() }
@@ -722,7 +667,7 @@ def Adapt_Graph(num_epochs_adapt = DOWNSTREAM_EPOCH_NUMBER,
 
     optimizer_adapt = torch.optim.Adam(
         [
-        # GNN、TFencoder、分类器MLP  的参数
+        # 
         {'params':list(GNN_Model.parameters())  + list(transformer_encoder.parameters())  + list(Classifier_adapt.parameters()) 
          , 
          'lr': learning_rate_adapt },
@@ -734,7 +679,7 @@ def Adapt_Graph(num_epochs_adapt = DOWNSTREAM_EPOCH_NUMBER,
     loss_metric = MeanMetric()
 
     acc_metric = Accuracy(task='multiclass', num_classes=num_classes).to(device)
-    #   Macro-F1 ：把每个类别转换成二分类问题，然后有一个二分类F1。把所有类别的二分类F1求平均值，得到 宏F1
+    #   
     f1_metric = F1Score(task='multiclass', num_classes=num_classes, average='macro').to(device)
     auroc_metric = AUROC(task="multiclass", num_classes=num_classes).to(device)
 
@@ -753,93 +698,91 @@ def Adapt_Graph(num_epochs_adapt = DOWNSTREAM_EPOCH_NUMBER,
         auroc_metric.reset()
 
 
-        #   训练数据集
+        #   
         pbar = tqdm(loaders['train'], total=len(loaders['train']), ncols=100)
         
         loss_list = []
-        #   训练数据集会包含   多个batch。
+        #   
         for batch in pbar:
             optimizer_adapt.zero_grad()  
             batch = batch.to(device)
 
-            #   一个 batch  包含 多个图，每个图有一个label。
-            # 对这个batch中 每个图的所有节点特征求和，得到一个图向量
+
             graph_emb,_ = GNN_Model(batch)  
         
-            #   graph_nums是  当前这个batch中的  图的数量
+
             graph_nums = graph_emb.size(0)
-            # 1. 将 graph_emb 作为 CLS token，增加序列维度
+
             cls_tokens = graph_emb.unsqueeze(1)  # (graph_nums , 1, 128)
 
 
-            # 2. 将 tokens 扩展到 batch 维度
-            domain_tokens_batch = final_tokens.expand(graph_nums, -1, -1)  # (graph_nums, Token数量（假设是390）, 128)
-            # 3. 拼接序列：CLS + Domain Tokens
-            seq = torch.cat([cls_tokens, domain_tokens_batch], dim=1)  # (graph_nums, 390 +1 , 128)
-            # 4. 过 Encoder
-            output = transformer_encoder(seq)  # (batch, 390 + 1, 128)
-            # 5. 取 CLS token（第一个位置）的输出
+
+            domain_tokens_batch = final_tokens.expand(graph_nums, -1, -1) 
+
+            seq = torch.cat([cls_tokens, domain_tokens_batch], dim=1)  # 
+            # 
+            output = transformer_encoder(seq)  # 
+            # 
             cls_output = output[:, 0, :]  # (batch, 128)
-            # 6. 送入 MLP 分类,   这里的pred是每个图 的 所有类别的预测分数（长度为8的向量，表示8个类别的预测值，可以是负数）
+            # 
             pred_score = Classifier_adapt(cls_output)
 
 
-            loss = torch.nn.functional.cross_entropy(pred_score, batch.y) #   每个图的预测值向量  先经过softmax得到预测概率（8个类别的概率的和为1），然后取正确类别的概率的 -ln值，这样正确类别的预测概率越大，其他类别的预测概率越小，LOSS值就越小
-            loss.backward() #   LOSS对 参数求梯度    
-            optimizer_adapt.step()    #   更新参数，更新GNN参数、下游任务头（2层MLP）、transformer
+            loss = torch.nn.functional.cross_entropy(pred_score, batch.y) #  
+            loss.backward() #    
+            optimizer_adapt.step()    #  
 
-              # 保留4位小数
+              # 
 
-            loss_metric.update(  round(loss.item(), 4)  )     #   累积
+            loss_metric.update(  round(loss.item(), 4)  )     #   
             loss_list.append(  round(loss.item(), 4)  )
             
         pbar.close()
 
 
 
-        # 这一轮的  【  验证  】
+
         transformer_encoder.eval()
         Classifier_adapt.eval()
         GNN_Model.eval()
                      
         pbar = tqdm(loaders['val'], total=len(loaders['val']), ncols=100, desc=f'Epoch {e} Validation, Acc: 0., F1: 0.')
-        with torch.no_grad():   #   没有梯度：代表不会更新模型参数
+        with torch.no_grad():   #   
             for batch in pbar:  #   
 
                 batch = batch.to(device)
-                #   一个 batch  包含 多个图，每个图有一个label。
-                # 对这个batch每个图的所有节点特征求和，得到一个图向量
+
                 graph_emb,_ = GNN_Model(batch)  
             
-                #   graph_nums是  当前这个batch中的  图的数量
+                #   
                 graph_nums = graph_emb.size(0)
-                # 1. 将 graph_emb 作为 CLS token，增加序列维度
+                # 
                 cls_tokens = graph_emb.unsqueeze(1)  # (graph_nums , 1, 128)
 
-                # 2. 将 tokens 扩展到 batch 维度
-                domain_tokens_batch = final_tokens.expand(graph_nums, -1, -1)  # (graph_nums, Token数量（假设是390）, 128)
-                # 3. 拼接序列：CLS + Domain Tokens
-                seq = torch.cat([cls_tokens, domain_tokens_batch], dim=1)  # (graph_nums, 390 +1 , 128)
-                # 4. 通过 Encoder
-                output = transformer_encoder(seq)  # (batch, 390 + 1, 128)
-                # 5. 取 CLS token（第一个位置）的输出
+                # 
+                domain_tokens_batch = final_tokens.expand(graph_nums, -1, -1)  # 
+                # 
+                seq = torch.cat([cls_tokens, domain_tokens_batch], dim=1)  # 
+                # 
+                output = transformer_encoder(seq)  # 
+                # 
                 cls_output = output[:, 0, :]  # (batch, 128)
-                # 6. 送入 MLP 分类,   这里的pred是每个图 的 所有类别的预测分数（长度为8的向量，表示8个类别的预测值，可以是负数）
+                # 
                 pred_score = Classifier_adapt(cls_output)
 
 
 
 
-                pred_class = pred_score.argmax(dim=-1)#   预测类别   
+                pred_class = pred_score.argmax(dim=-1)#   
 
                       
 
-                #   每次调用update的时候，会把新的【预测值，真实值】加入累积数据当中。因此最后的acc_metirc代表的是整个验证集所有batch的【预测值，真实值】累积
+                #   
                 acc_metric.update(pred_class, batch.y)    
                 f1_metric.update(pred_class, batch.y)
                 auroc_metric.update(pred_score, batch.y)
 
-                #   update()会累积值，compute()会根据之前所有累积的值来计算最终ACC
+                
                 pbar.set_description(f'Epoch {e} Validation Acc: {acc_metric.compute():.4f}, AUROC: {auroc_metric.compute():.4f}, F1: {f1_metric.compute():.4f}', refresh=True)
             pbar.close()
 
@@ -855,19 +798,19 @@ def Adapt_Graph(num_epochs_adapt = DOWNSTREAM_EPOCH_NUMBER,
         
 
 
-    #   上述有100轮【训练 +  验证】，每一轮都会有一个 【验证ACC】， 我们选取ACC最高的那一轮（表示那一轮的模型预测效果最好，就是在验证集上效果最好），用那一轮的模型来作为最优模型
+    #   
     TF_encoder_model = best_TFencoder_model if best_TFencoder_model is not None else transformer_encoder 
     GNN__model = best_GNN_model if best_GNN_model is not None else GNN_Model
     MLP__model = best_MLP if best_MLP is not None else Classifier_adapt
 
 
 
-    #   TEST:  微调（再训练）的100轮结束，选取验证集上效果最好的一轮，用这一轮的模型来作为最优模型。
+    #   
     TF_encoder_model.eval()
     GNN__model.eval()
     MLP__model.eval()
 
-    #   把之前累积的【预测值，真实值】清空
+    #   
     acc_metric.reset()
     f1_metric.reset()
     auroc_metric.reset()
@@ -879,33 +822,32 @@ def Adapt_Graph(num_epochs_adapt = DOWNSTREAM_EPOCH_NUMBER,
             
             batch = batch.to(device)
 
-            #   一个 batch  包含 多个图，每个图有一个label。
-            # 对这个batch每个图的所有节点特征求和，得到一个图向量
-            graph_emb,_ = GNN__model(batch)  
-            #   graph_nums是  当前这个batch中的  图的数量
-            graph_nums = graph_emb.size(0)
-            # 1. 将 graph_emb 作为 CLS token，增加序列维度
-            cls_tokens = graph_emb.unsqueeze(1)  # (graph_nums , 1, 128)
 
-            # 2. 将 tokens 扩展到 batch 维度
-            domain_tokens_batch = final_tokens.expand(graph_nums, -1, -1)  # (graph_nums, Token数量（假设是390）, 128)
-            # 3. 拼接序列：CLS + Domain Tokens
-            seq = torch.cat([cls_tokens, domain_tokens_batch], dim=1)  # (graph_nums, 390 +1 , 128)
-            # 4. 通过 Encoder
-            output = TF_encoder_model(seq)  # (batch, 390 + 1, 128)
-            # 5. 取 CLS token（第一个位置）的输出
+            graph_emb,_ = GNN__model(batch)  
+            
+            graph_nums = graph_emb.size(0)
+            
+            cls_tokens = graph_emb.unsqueeze(1)  # 
+
+            
+            domain_tokens_batch = final_tokens.expand(graph_nums, -1, -1)  # 
+            # 
+            seq = torch.cat([cls_tokens, domain_tokens_batch], dim=1)  # 
+            # 
+            output = TF_encoder_model(seq)  # 
+            # 
             cls_output = output[:, 0, :]  # (batch, 128)
-            # 6. 送入 MLP 分类,   这里的pred是每个图 的 所有类别的预测分数（长度为8的向量，表示8个类别的预测值，可以是负数）
+            # 
             pred_score = MLP__model(cls_output)
 
-            pred_class = pred_score.argmax(dim=-1)#   预测类别 
+            pred_class = pred_score.argmax(dim=-1)#  
             
-            acc_metric.update(pred_class, batch.y)    #   预测类别pred  和  真实类别标签y  ，计算出ACC（预测准确率）
+            acc_metric.update(pred_class, batch.y)    #   
             f1_metric.update(pred_class, batch.y)
-            #   算AUC，要用预测分数
+            #   
             auroc_metric.update(pred_score, batch.y) 
             
-             #   以下输出的是  目前所有batch累加的  acc，AUC, F1。
+             #   
             pbar.set_description(f'Testing Acc: {acc_metric.compute():.4f}, AUROC: {auroc_metric.compute():.4f}, F1: {f1_metric.compute():.4f}', refresh=True)
         
 
@@ -932,66 +874,58 @@ def Adapt_Graph(num_epochs_adapt = DOWNSTREAM_EPOCH_NUMBER,
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description = "DDGFM")
-    parser.add_argument('--num_neg', type=int, default=60)  # 无用参数
-    parser.add_argument('--repeat_times', type=int, default=5) # 无用参数
-    #   预训练阶段的学习率固定了，就在pretrain函数里面。下面是  下游阶段的学习率
-    parser.add_argument('--lr_adapt', type=float, default=1e-3)     #   下游的学习率
+    parser.add_argument('--num_neg', type=int, default=60)  # 
+    parser.add_argument('--repeat_times', type=int, default=5) # 
+    #   
+    parser.add_argument('--lr_adapt', type=float, default=1e-3)     #  
     parser.add_argument('--wd_adapt', type=float, default=1e-5)
-    parser.add_argument('--pretrain_epochs', type=int, default = PRETRAIN_EPOCHS)   # 预训练450个epoch
-    parser.add_argument('--global_num_heads', type=int, default = 2)    # 无用参数
-    parser.add_argument('--model_name', type=str, default='FAGCN')  #   选择的 GNN 模型    
-    parser.add_argument('--node_fts', type=int, default= 128)#    统一后的初始节点特征维度
-    parser.add_argument('--hidden', type=int, default=128)  #  过GNN后的节点特征维度
-    parser.add_argument('--downstream_few_shot', type=int, default= 1 )   #   下游节点分类或者图分类的时候，每个类别有几个 训练样本
-    #   预训练seed（固定就一个）
+    parser.add_argument('--pretrain_epochs', type=int, default = PRETRAIN_EPOCHS)   # 
+    parser.add_argument('--global_num_heads', type=int, default = 2)    # 
+    parser.add_argument('--model_name', type=str, default='FAGCN')  #     
+    parser.add_argument('--node_fts', type=int, default= 128)#   
+    parser.add_argument('--hidden', type=int, default=128)  #  
+    parser.add_argument('--downstream_few_shot', type=int, default= 1 )   #   
+    #   
     parser.add_argument('--pre_seed', type=int, default=42)
-    #   这个表示下游阶段要不要做   图分类
+    #   
     parser.add_argument('--graph_cls', type = bool, default = True)
-    #   这个表示下游阶段要不要做  节点分类
-    parser.add_argument('--node_cls', type = bool, default = False)  # 无用参数
+    #   
+    parser.add_argument('--node_cls', type = bool, default = False)  # 
 
-    #此参数已经不再使用。所以设置成0.
-    # 控制 凸包不要过度扩大，也就是任意两个源域要有最基本的相似度
+
     parser.add_argument('--regular_3', type=float, default= 0.0 ) 
 
-    # 我先把第三个 正则项（平衡正则项） 的惩罚系数设置为0，也就是先忽略这个正则项
-    parser.add_argument('--min_sim', type=float, default= -0.75 ) #  两个源域的 最小余弦相似度
+    
+    parser.add_argument('--min_sim', type=float, default= -0.75 ) # 
 
-    parser.add_argument('--nm_subgs', type=int, default= 50)#    每个数据集采集的  子图个数
-    parser.add_argument('--walk_len', type=int, default= 20) #   每个子图的  游走路径长度
-    parser.add_argument('--regular', type=float, default= 0.95 ) #控制方向的正则项  的系数
-    parser.add_argument('--regular_si', type=float, default= 0.1 ) #控制扩张系数的正则项  的系数
+    parser.add_argument('--nm_subgs', type=int, default= 50)#    
+    parser.add_argument('--walk_len', type=int, default= 20) #   
+    parser.add_argument('--regular', type=float, default= 0.95 ) #
+    parser.add_argument('--regular_si', type=float, default= 0.1 ) #
     
     
-    # 预训练数据集，全部可用数据集  Cora_PubMed_CiteSeer_Computers_Photo_CoauthorPhysics_amazonratings_romanempire_Questions_chameleon_squirrel_cornell_Facebook_lastFM_CoauthorCS_PROTEINS_ENZYMES_COX2_MUTAG_BZR_WikiCS
-    # PubMed_CiteSeer_Photo_amazonratings_romanempire_squirrel_cornell_Facebook_CoauthorCS_WikiCS
+
     parser.add_argument('--pre_dataset', type=str, default='Cora_CiteSeer', help='Use "_" to split')
     
-
-
-    #   下游数据集，6个数据集：  
-    # Cora ,Computers , chameleon,  lastFM, CoauthorPhysics, Questions
-
-    #  还有4个  图分类数据集 PROTEINS, ENZYMES, COX2, BZR
     parser.add_argument('--adapt_dataset', type=str, default='Cora')
 
 
 
-    #   把所有  命令行参数都读取进来
+
     args = parser.parse_args()
-    # 处理 pre_dataset 字符串为列表
+
     pre_dataset_list = args.pre_dataset.strip().split('_')
 
 
-    #########################   图分类
+    ######
     if args.graph_cls :
         ACC_List, AUROC_List, F1_List = [], [], []
-        for seed in range(1024,1024 + SEED_NUM): #   一般是 10个seed。
-              # 正常来说，训练出来一个模型，就不用在重复预训练了。
+        for seed in range(1024,1024 + SEED_NUM): #  
+              # 
 
-              # === 预训练 ===  训练一次之后，就可以把预训练部分注释掉，然后单独做微调即可
+              # 
             
-            if seed==1024 :    #   加这句if，那就是1次预训练，搭配多次微调。 （不加的话，那就是1次预训练+1次微调，做5次）
+            if seed==1024 :    #   
                 pretrain(
                     num_epochs = args.pretrain_epochs,
                     num_subgraphs=args.nm_subgs,
@@ -1010,7 +944,7 @@ if __name__ == "__main__":
 
 
 
-            # === 下游图分类（微调） ===
+            # 
             results = Adapt_Graph(
                 learning_rate_adapt=args.lr_adapt,
                 weight_decay_adapt=args.wd_adapt,
@@ -1027,11 +961,11 @@ if __name__ == "__main__":
             AUROC_List.append(results['AUROC'])
             F1_List.append(results['F1'])
 
-        output_path = os.path.join(data_dir, '微调结果【图分类】.txt')
+        output_path = os.path.join(data_dir, 'fine-tuning results.txt')
         with open(output_path, 'a+') as f:
-            f.write('-----------------------【使用Encoder】--------------------------\n')
-            f.write(f'输出时间: {datetime.now().strftime("%Y-%m-%d %H:%M:%S")}\n') 
-            f.write(f'预训练数据:{args.pre_dataset}, 下游数据集： : 【{args.adapt_dataset}】\n')
+            f.write('-----------------------DDGFM--------------------------\n')
+            f.write(f'Time: {datetime.now().strftime("%Y-%m-%d %H:%M:%S")}\n') 
+            f.write(f'Pretrain:{args.pre_dataset}, Downstream： : 【{args.adapt_dataset}】\n')
             f.write(f'ACC :  {np.mean(ACC_List):.4f} ± {np.std(ACC_List):.4f} \n')
             # f.write(f'F1 :  {np.mean(F1_List):.4f} ± {np.std(F1_List):.4f} \n')
             # f.write(f'AUC :  {np.mean(AUROC_List):.4f} ± {np.std(AUROC_List):.4f} \n')
